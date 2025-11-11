@@ -5,6 +5,9 @@ struct TemplateListView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \WorkoutTemplate.name) private var templates: [WorkoutTemplate]
 
+    // Track which templates have been added to a workout in this session
+    @State private var addedTemplateIDs: Set<UUID> = []
+
     var body: some View {
         List {
             ForEach(templates) { template in
@@ -20,11 +23,14 @@ struct TemplateListView: View {
                         }
                     }
                     Spacer()
-                    Button("Add to Workout") {
+                    let isAdded = addedTemplateIDs.contains(template.id)
+                    Button(isAdded ? "Added to workout" : "Add to workout") {
                         let w = template.instantiate(toRounds: 1)
                         context.insert(w)
+                        addedTemplateIDs.insert(template.id)
                     }
                     .buttonStyle(.bordered)
+                    .disabled(isAdded)
                 }
             }
             .onDelete(perform: deleteTemplates)

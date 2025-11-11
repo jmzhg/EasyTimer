@@ -8,64 +8,82 @@
 import SwiftUI
 import SwiftData
 
+private enum PrimaryRoute: Hashable {
+    case templates
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Workout.createdAt, order: .reverse) private var workouts: [Workout]
     @State private var isPresentingAdd = false
 
+    // Explicit navigation path for the primary column
+    @State private var primaryPath: [PrimaryRoute] = []
+
     var body: some View {
         NavigationSplitView {
-            Group {
-                if workouts.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "stopwatch")
-                            .font(.system(size: 44))
-                            .padding(.bottom, 4)
-                        Text("No workouts yet")
-                            .font(.headline)
-                        Text("Tap the + to create your first interval set.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List {
-                        ForEach(workouts) { workout in
-                            NavigationLink {
-                                RunnerView(workout: workout)
-                            } label: {
-                                VStack(alignment: .leading) {
-                                    Text(workout.name).font(.headline)
-                                    Text(durationString(workout.totalDuration))
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
+            // Primary column has its own explicit NavigationStack and path
+            NavigationStack(path: $primaryPath) {
+                Group {
+                    if workouts.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "stopwatch")
+                                .font(.system(size: 44))
+                                .padding(.bottom, 4)
+                            Text("No workouts yet")
+                                .font(.headline)
+                            Text("Tap the + to create your first interval set.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        List {
+                            ForEach(workouts) { workout in
+                                NavigationLink {
+                                    RunnerView(workout: workout)
+                                } label: {
+                                    VStack(alignment: .leading) {
+                                        Text(workout.name).font(.headline)
+                                        Text(durationString(workout.totalDuration))
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
+                            .onDelete(perform: deleteWorkouts)
                         }
-                        .onDelete(perform: deleteWorkouts)
                     }
                 }
-            }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: { isPresentingAdd = true }) {
-                        Label("Add Workout", systemImage: "plus")
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        EditButton()
+                    }
+                    ToolbarItem {
+                        Button(action: { isPresentingAdd = true }) {
+                            Label("Add Workout", systemImage: "plus")
+                        }
+                    }
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            // Push Templates into the same primary stack
+                            primaryPath.append(.templates)
+                        } label: {
+                            Label("Templates", systemImage: "list.bullet.rectangle")
+                        }
                     }
                 }
-                ToolbarItem(placement: .navigationBarLeading) {
-                    NavigationLink {
+                .sheet(isPresented: $isPresentingAdd) {
+                    AddWorkoutSheet { newWorkout in
+                        modelContext.insert(newWorkout)
+                    }
+                }
+                // Define destinations for the primary stack path
+                .navigationDestination(for: PrimaryRoute.self) { route in
+                    switch route {
+                    case .templates:
                         TemplateListView()
-                    } label: {
-                        Label("Templates", systemImage: "list.bullet.rectangle")
                     }
-                }
-            }
-            .sheet(isPresented: $isPresentingAdd) {
-                AddWorkoutSheet { newWorkout in
-                    modelContext.insert(newWorkout)
                 }
             }
         } detail: {

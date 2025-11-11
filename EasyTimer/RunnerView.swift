@@ -52,6 +52,13 @@ final class WorkoutTimer: ObservableObject {
         return val == 0 ? 0 : val // 0 = use bundled sound if available
     }
 
+    deinit {
+        // deinit is nonisolated; hop to the main actor to call stop() without capturing a mutable var
+        Task { @MainActor [weak self] in
+            self?.stop()
+        }
+    }
+
     func start(workout: Workout) {
         prepareFeedback()
         stop()
@@ -104,9 +111,9 @@ final class WorkoutTimer: ObservableObject {
         case .running(let idx, let round, _), .paused(let idx, let round, _):
             currentIndex = idx
             currentRound = round
-            // Cancel current task and immediately advance index
             task?.cancel()
             let segments = workout.segments.sorted { $0.order < $1.order }
+            guard !segments.isEmpty else { stop(); return }
             if currentIndex < segments.count - 1 {
                 currentIndex += 1
             } else {
@@ -114,7 +121,6 @@ final class WorkoutTimer: ObservableObject {
                 currentIndex = 0
                 if currentRound < workout.totalRounds { currentRound += 1 } else { state = .finished; return }
             }
-            // Restart with full duration of the new segment
             run(workout: workout, resumeRemaining: nil)
         default:
             return
@@ -122,17 +128,16 @@ final class WorkoutTimer: ObservableObject {
     }
 
     func skipToNextSet(workout: Workout) {
-        // A "set" here means jumping to the first segment of the next round
         switch state {
         case .running(_, let round, _), .paused(_, let round, _):
             task?.cancel()
-            _ = workout.segments.sorted { $0.order < $1.order }
+            let segments = workout.segments.sorted { $0.order < $1.order }
+            guard !segments.isEmpty else { stop(); return }
             if round < workout.totalRounds {
                 currentRound = round + 1
                 currentIndex = 0
                 run(workout: workout, resumeRemaining: nil)
             } else {
-                // Already in final round -> finish
                 state = .finished
             }
         default:
@@ -147,6 +152,7 @@ final class WorkoutTimer: ObservableObject {
             currentRound = round
             task?.cancel()
             let segments = workout.segments.sorted { $0.order < $1.order }
+            guard !segments.isEmpty else { stop(); return }
             if currentIndex > 0 {
                 currentIndex -= 1
             } else if currentRound > 1 {
@@ -165,16 +171,9 @@ final class WorkoutTimer: ObservableObject {
         switch state {
         case .running(_, let round, _), .paused(_, let round, _):
             task?.cancel()
-            if round > 1 {
-                currentRound = round - 1
-                currentIndex = 0
-                run(workout: workout, resumeRemaining: nil)
-            } else {
-                // already first round; restart first segment
-                currentRound = 1
-                currentIndex = 0
-                run(workout: workout, resumeRemaining: nil)
-            }
+            currentRound = max(1, round - 1)
+            currentIndex = 0
+            run(workout: workout, resumeRemaining: nil)
         default:
             return
         }
@@ -187,10 +186,21 @@ final class WorkoutTimer: ObservableObject {
         pausedIndex = nil
         pausedRound = nil
         pausedRemaining = nil
+
+        // Optional: stop any currently playing audio and relax the session
+        audioPlayer?.stop()
+        audioPlayer = nil
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
     private func run(workout: Workout, resumeRemaining: TimeInterval?) {
         let segments = workout.segments.sorted { $0.order < $1.order }
+        guard !segments.isEmpty, workout.totalRounds > 0 else {
+            stop()
+            return
+        }
+
         task = Task { [weak self] in
             guard let self else { return }
             pausedIndex = nil
@@ -200,6 +210,9 @@ final class WorkoutTimer: ObservableObject {
 
             outerLoop: while currentRound <= workout.totalRounds {
                 while currentIndex < segments.count {
+                    // If task was cancelled while between segments/rounds
+                    if Task.isCancelled { return }
+
                     let segment = segments[currentIndex]
                     let duration = remainingForCurrent ?? segment.duration
                     remainingForCurrent = nil
@@ -209,7 +222,6 @@ final class WorkoutTimer: ObservableObject {
 
                     while remaining > 0 {
                         try? await Task.sleep(nanoseconds: UInt64(tick * 1_000_000_000))
-                        // If pause/stop cancelled the task, exit immediately before touching state
                         if Task.isCancelled { return }
                         remaining = max(0, remaining - tick)
                         await MainActor.run {
@@ -221,9 +233,8 @@ final class WorkoutTimer: ObservableObject {
                     let isLastInRound = (currentIndex == segments.count - 1)
                     let nextIsRest: Bool = {
                         if isLastInRound {
-                            // If another round remains, the next segment will be the first segment again
                             if self.currentRound < workout.totalRounds, let first = segments.first { return first.kind == .rest }
-                            return false // session end; handled below
+                            return false
                         } else {
                             return segments[self.currentIndex + 1].kind == .rest
                         }
@@ -237,7 +248,6 @@ final class WorkoutTimer: ObservableObject {
                 currentRound += 1
             }
 
-            // Entire session finished — success feedback
             notifyTransition(nextIsRest: false, isSessionEnd: true)
 
             await MainActor.run {
@@ -429,6 +439,12 @@ struct RunnerView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Close") { isShowingSettings = false } }
                 }
+            }
+        }
+        .onDisappear {
+            // Ensure timer stops when leaving RunnerView — hop to main actor to avoid isolation error.
+            Task { @MainActor in
+                timer.stop()
             }
         }
     }

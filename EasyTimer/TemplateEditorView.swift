@@ -3,15 +3,26 @@ import SwiftData
 
 struct TemplateEditorView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
     @Bindable var template: WorkoutTemplate
 
     @State private var isAddingBlock = false
+    @State private var isDirty = false
 
     var body: some View {
         Form {
             Section("Template") {
-                TextField("Name", text: $template.name)
-                TextField("Notes", text: Binding(get: { template.notes ?? "" }, set: { template.notes = $0.isEmpty ? nil : $0 }))
+                TextField("Name", text: Binding(
+                    get: { template.name },
+                    set: { template.name = $0; markDirty() }
+                ))
+                TextField(
+                    "Notes",
+                    text: Binding(
+                        get: { template.notes ?? "" },
+                        set: { let v = $0.isEmpty ? nil : $0; template.notes = v; markDirty() }
+                    )
+                )
             }
 
             Section("Blocks") {
@@ -20,7 +31,7 @@ struct TemplateEditorView: View {
                 } else {
                     List {
                         ForEach(template.blocks.sorted(by: { $0.order < $1.order })) { block in
-                            BlockRow(block: block)
+                            BlockRow(block: block, onChange: markDirty)
                         }
                         .onDelete(perform: deleteBlocks)
                         .onMove(perform: moveBlocks)
@@ -48,9 +59,24 @@ struct TemplateEditorView: View {
 #if canImport(UIKit) && (os(iOS) || os(tvOS))
             ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { hideKeyboard() } }
 #endif
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") {
+                    normalizeOrders()
+                    try? context.save()
+                    isDirty = false
+                    // Do NOT dismiss here; stay on the editor. Back button will pop.
+                }
+                .disabled(!isDirty)
+            }
         }
+        // Mark dirty when blocks array changes (add/remove/reorder)
         .onChange(of: template.blocks) { _, _ in
             normalizeOrders()
+            markDirty()
+        }
+        // Mark dirty when any block’s content changes by observing a snapshot of relevant fields
+        .onChange(of: blocksSnapshot(template.blocks)) { _, _ in
+            markDirty()
         }
         .onDisappear { try? context.save() }
     }
@@ -60,6 +86,7 @@ struct TemplateEditorView: View {
         let block = TemplateBlock(order: order, title: "Block \(order + 1)", sets: 3, reps: 5, workDuration: 7, restBetweenReps: 3, restBetweenSets: 30)
         block.template = template
         template.blocks.append(block)
+        markDirty()
     }
 
     private func deleteBlocks(offsets: IndexSet) {
@@ -72,6 +99,7 @@ struct TemplateEditorView: View {
             }
         }
         normalizeOrders()
+        markDirty()
     }
 
     private func moveBlocks(from source: IndexSet, to destination: Int) {
@@ -79,11 +107,30 @@ struct TemplateEditorView: View {
         sorted.move(fromOffsets: source, toOffset: destination)
         for (i, b) in sorted.enumerated() { b.order = i }
         template.blocks = sorted
+        markDirty()
     }
 
     private func normalizeOrders() {
         let sorted = template.blocks.sorted { $0.order < $1.order }
         for (i, b) in sorted.enumerated() { b.order = i }
+    }
+
+    private func blocksSnapshot(_ blocks: [TemplateBlock]) -> [BlockSnapshot] {
+        // Create a lightweight, comparable snapshot of each block to detect edits
+        blocks.sorted { $0.order < $1.order }.map {
+            BlockSnapshot(id: $0.id,
+                          title: $0.title ?? "",
+                          sets: $0.sets,
+                          reps: $0.reps,
+                          work: $0.workDuration,
+                          repRest: $0.restBetweenReps,
+                          setRest: $0.restBetweenSets,
+                          order: $0.order)
+        }
+    }
+
+    private func markDirty() {
+        if !isDirty { isDirty = true }
     }
 
     private func formatDuration(_ t: TimeInterval) -> String {
@@ -94,12 +141,27 @@ struct TemplateEditorView: View {
     }
 }
 
+private struct BlockSnapshot: Equatable, Hashable {
+    let id: UUID
+    let title: String
+    let sets: Int
+    let reps: Int
+    let work: TimeInterval
+    let repRest: TimeInterval
+    let setRest: TimeInterval
+    let order: Int
+}
+
 private struct BlockRow: View {
     @Bindable var block: TemplateBlock
+    var onChange: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Title", text: Binding(get: { block.title ?? "" }, set: { block.title = $0.isEmpty ? nil : $0 }))
+            TextField("Title", text: Binding(
+                get: { block.title ?? "" },
+                set: { block.title = $0.isEmpty ? nil : $0; onChange() }
+            ))
                 .font(.headline)
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                 // Sets row: label | value | stepper
@@ -109,7 +171,10 @@ private struct BlockRow: View {
                     Text("\(block.sets)")
                         .monospacedDigit()
                         .gridColumnAlignment(.trailing)
-                    Stepper("", value: $block.sets, in: 1...100)
+                    Stepper("", value: Binding(
+                        get: { block.sets },
+                        set: { block.sets = $0; onChange() }
+                    ), in: 1...100)
                         .labelsHidden()
                         .fixedSize(horizontal: true, vertical: false)
                         .layoutPriority(1)
@@ -121,7 +186,10 @@ private struct BlockRow: View {
                     Text("\(block.reps)")
                         .monospacedDigit()
                         .gridColumnAlignment(.trailing)
-                    Stepper("", value: $block.reps, in: 1...100)
+                    Stepper("", value: Binding(
+                        get: { block.reps },
+                        set: { block.reps = $0; onChange() }
+                    ), in: 1...100)
                         .labelsHidden()
                         .fixedSize(horizontal: true, vertical: false)
                         .layoutPriority(1)
@@ -129,9 +197,18 @@ private struct BlockRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack {
-                DurationField(title: "Work", seconds: $block.workDuration)
-                DurationField(title: "Rep Rest", seconds: $block.restBetweenReps)
-                DurationField(title: "Set Rest", seconds: $block.restBetweenSets)
+                DurationField(title: "Work", seconds: Binding(
+                    get: { block.workDuration },
+                    set: { block.workDuration = $0; onChange() }
+                ))
+                DurationField(title: "Rep Rest", seconds: Binding(
+                    get: { block.restBetweenReps },
+                    set: { block.restBetweenReps = $0; onChange() }
+                ))
+                DurationField(title: "Set Rest", seconds: Binding(
+                    get: { block.restBetweenSets },
+                    set: { block.restBetweenSets = $0; onChange() }
+                ))
             }
         }
         .padding(.vertical, 4)
@@ -168,7 +245,7 @@ private extension View {
 #Preview {
     let t = WorkoutTemplate(name: "Sample")
     t.blocks = [
-        TemplateBlock(order: 0, title: "Hang", sets: 2, reps: 3, workDuration: 7, restBetweenReps: 3, restBetweenSets: 30)
+        TemplateBlock(order: 0, title: "Name Your Workout", sets: 2, reps: 3, workDuration: 7, restBetweenReps: 3, restBetweenSets: 30)
     ]
     return NavigationStack { TemplateEditorView(template: t) }
         .modelContainer(for: [WorkoutTemplate.self, TemplateBlock.self], inMemory: true)
