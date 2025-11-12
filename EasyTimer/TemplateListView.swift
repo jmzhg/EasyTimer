@@ -8,12 +8,15 @@ struct TemplateListView: View {
     // Track which templates have been added to a workout in this session
     @State private var addedTemplateIDs: Set<UUID> = []
 
+    // Callback to push the editor in the shared NavigationPath
+    var onEdit: (WorkoutTemplate) -> Void = { _ in }
+
     var body: some View {
         List {
             ForEach(templates) { template in
                 HStack {
-                    NavigationLink {
-                        TemplateEditorView(template: template)
+                    Button {
+                        onEdit(template)
                     } label: {
                         VStack(alignment: .leading) {
                             Text(template.name).font(.headline)
@@ -22,7 +25,10 @@ struct TemplateListView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .buttonStyle(.plain)
+
                     Spacer()
+
                     let isAdded = addedTemplateIDs.contains(template.id)
                     Button(isAdded ? "Added to Workout" : "Add to Workout") {
                         let w = template.instantiate(toRounds: 1)

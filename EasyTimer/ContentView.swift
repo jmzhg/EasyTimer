@@ -8,16 +8,25 @@
 import SwiftUI
 import SwiftData
 
+// Route enum for Templates flow within the primary NavigationStack
+enum TemplatesRoute: Hashable {
+    case list
+    case edit(WorkoutTemplate)
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Workout.createdAt, order: .reverse) private var workouts: [Workout]
     @State private var isPresentingAdd = false
 
+    // Single navigation path for the entire primary column, including Templates flow
+    @State private var templatesPath: [TemplatesRoute] = []
+
     var body: some View {
         NavigationSplitView {
-            // Wrap the primary column in a NavigationStack so pushes (including to TemplateListView and then to TemplateEditorView)
-            // stay in the same stack and the back button returns to Templates list, not to root.
-            NavigationStack {
+            // Wrap the primary column in a NavigationStack with an explicit path so pushes
+            // to TemplateListView and then to TemplateEditorView are guaranteed to be in the same stack.
+            NavigationStack(path: $templatesPath) {
                 Group {
                     if workouts.isEmpty {
                         VStack(spacing: 12) {
@@ -59,8 +68,9 @@ struct ContentView: View {
                         }
                     }
                     ToolbarItem(placement: .navigationBarLeading) {
-                        NavigationLink {
-                            TemplateListView()
+                        // Push Templates flow into the same path
+                        Button {
+                            templatesPath.append(.list)
                         } label: {
                             Label("Templates", systemImage: "list.bullet.rectangle")
                         }
@@ -69,6 +79,18 @@ struct ContentView: View {
                 .sheet(isPresented: $isPresentingAdd) {
                     AddWorkoutSheet { newWorkout in
                         modelContext.insert(newWorkout)
+                    }
+                }
+                // Navigation for Templates flow
+                .navigationDestination(for: TemplatesRoute.self) { route in
+                    switch route {
+                    case .list:
+                        TemplateListView { template in
+                            templatesPath.append(.edit(template))
+                        }
+                        .navigationTitle("Templates")
+                    case .edit(let template):
+                        TemplateEditorView(template: template)
                     }
                 }
             }
