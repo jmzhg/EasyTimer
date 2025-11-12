@@ -24,7 +24,7 @@ struct TemplateListView: View {
                     }
                     Spacer()
                     let isAdded = addedTemplateIDs.contains(template.id)
-                    Button(isAdded ? "Added to workout" : "Add to workout") {
+                    Button(isAdded ? "Added to Workout" : "Add to Workout") {
                         let w = template.instantiate(toRounds: 1)
                         context.insert(w)
                         addedTemplateIDs.insert(template.id)

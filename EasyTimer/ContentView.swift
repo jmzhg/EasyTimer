@@ -8,22 +8,16 @@
 import SwiftUI
 import SwiftData
 
-private enum PrimaryRoute: Hashable {
-    case templates
-}
-
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Workout.createdAt, order: .reverse) private var workouts: [Workout]
     @State private var isPresentingAdd = false
 
-    // Explicit navigation path for the primary column
-    @State private var primaryPath: [PrimaryRoute] = []
-
     var body: some View {
         NavigationSplitView {
-            // Primary column has its own explicit NavigationStack and path
-            NavigationStack(path: $primaryPath) {
+            // Wrap the primary column in a NavigationStack so pushes (including to TemplateListView and then to TemplateEditorView)
+            // stay in the same stack and the back button returns to Templates list, not to root.
+            NavigationStack {
                 Group {
                     if workouts.isEmpty {
                         VStack(spacing: 12) {
@@ -65,9 +59,8 @@ struct ContentView: View {
                         }
                     }
                     ToolbarItem(placement: .navigationBarLeading) {
-                        Button {
-                            // Push Templates into the same primary stack
-                            primaryPath.append(.templates)
+                        NavigationLink {
+                            TemplateListView()
                         } label: {
                             Label("Templates", systemImage: "list.bullet.rectangle")
                         }
@@ -76,13 +69,6 @@ struct ContentView: View {
                 .sheet(isPresented: $isPresentingAdd) {
                     AddWorkoutSheet { newWorkout in
                         modelContext.insert(newWorkout)
-                    }
-                }
-                // Define destinations for the primary stack path
-                .navigationDestination(for: PrimaryRoute.self) { route in
-                    switch route {
-                    case .templates:
-                        TemplateListView()
                     }
                 }
             }
